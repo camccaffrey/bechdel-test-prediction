@@ -1,0 +1,157 @@
+---
+title: "clean"
+author: "Connor McCaffrey"
+date: "2025-05-13"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**This file corresponds to the contents of Section 2: Data of my final report**
+
+### Load Packages
+
+```{r message=F, warning=F}
+library(tidyverse)
+library(tidytuesdayR)
+```
+
+### Load Data
+
+```{r}
+# download directly
+bechdel <- tidytuesdayR::tt_load(2021, week = 11)$movies
+
+# load from file
+#bechdel <- read.csv("bechdel.csv")
+```
+
+### Clean Data
+
+```{r}
+# get vector of popular genres (plus "All")
+major_genres <- bechdel %>%
+  
+    # add "All" to each movie's genre list
+    mutate(genre = paste(genre, ", All", sep="")) %>%
+  
+    # expand rows for each genre value
+    separate_rows(genre, sep = ", ") %>%
+  
+    # get all genres with count >= 10
+    group_by(genre) %>%
+    summarize(count = n()) %>%
+    filter(count >= 10, genre != "NA") %>%
+    pull(genre)
+
+major_genres
+```
+
+```{r}
+# calculate pass rate for each genre (plus "All")
+df_genre <- bechdel %>%
+  
+    # add "All" to each movie's genre list
+    mutate(genre = paste(genre, ", All", sep=""),
+           outcome = ifelse(binary == "PASS", 1, 0)) %>%
+  
+    # expand rows for each genre value
+    separate_rows(genre, sep = ", ") %>%
+  
+    # set uncommon genres to "Other"
+    mutate(genre = ifelse(genre %in% major_genres, genre, "Other")) %>%
+  
+    # calculate pass rate for each genre
+    group_by(genre) %>%
+    summarize(genre_rate = mean(outcome),
+              count = n()) %>%
+    arrange(genre_rate) %>%
+    select(genre, genre_rate)
+
+df_genre
+```
+
+```{r}
+# calculate average genre rate fore each movie (imdb_id)
+df_avg_genre <- bechdel %>%
+    
+    # expand rows for each genre value
+    separate_rows(genre, sep = ", ") %>%
+  
+    # set uncommon genres to "Other"
+    mutate(genre = ifelse(genre %in% major_genres, genre, "Other")) %>%
+  
+    # get pass rate for each genre
+    left_join(df_genre, by = join_by(genre)) %>%
+  
+    # calculate average genre pass rate per movie
+    group_by(imdb) %>%
+    summarize(genre_rate = mean(genre_rate))
+
+df_avg_genre
+```
+
+```{r}
+# create clean dataset
+clean <- bechdel %>%
+           # create binary response variable
+    mutate(outcome = ifelse(binary == "PASS", 1, 0),
+           
+           # create binary English variable
+           english = ifelse(language == "English", 1, 0),
+           
+           # crete binary American variable
+           american = ifelse(country == "USA", 1, 0),
+           
+           # convert date string to date object
+           date = as.Date(released, format = "%d %b %Y"),
+           
+           # extract month as numeric variable
+           month = as.numeric(format(date, "%m")),
+           
+           # create categorical season variable
+           season = case_when(
+             month %in% c(12, 1, 2)  ~ "Winter",
+             month %in% c(3, 4, 5)   ~ "Spring",
+             month %in% c(6, 7, 8)   ~ "Summer",
+             month %in% c(9, 10, 11) ~ "Fall",
+             TRUE ~ NA),
+           
+           # convert "x min" runtime strings to numeric x runtime
+           runtime = as.numeric(str_sub(runtime, 1, -5)),
+           
+           # create numeric rating mapping
+           rating_score = case_when(
+             rated == "G"     ~ 1,
+             rated == "PG"    ~ 2,
+             rated == "PG-13" ~ 3,
+             rated == "R"     ~ 4,
+             rated == "NC-17" ~ 5,
+             rated == "X"     ~ 5,  # match to NC-17
+             rated == "TV-PG" ~ 2,  # match to PG
+             rated == "TV-14" ~ 3,  # match to PG-13
+             rated %in% c("Not Rated", "Unrated", "N/A") ~ NA_real_,
+             TRUE ~ NA_real_ ),
+           
+           # convert all dollar variables from string to numeric
+           budget = as.numeric(budget),
+           intgross = as.numeric(intgross),
+           domgross = as.numeric(domgross),
+           budget_2013 = as.numeric(budget_2013),
+           intgross_2013 = as.numeric(intgross_2013),
+           domgross_2013 = as.numeric(domgross_2013)) %>%
+    
+    # get average genre score for each movie
+    left_join(df_avg_genre, by = join_by(imdb))
+
+
+clean
+```
+
+### Save to File
+
+```{r}
+write.csv(clean, "clean.csv", row.names=FALSE)
+```

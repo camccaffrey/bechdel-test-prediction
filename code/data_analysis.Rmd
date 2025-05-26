@@ -1,0 +1,246 @@
+---
+title: "data_analysis"
+author: "Connor McCaffrey"
+date: "2025-05-13"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**This file corresponds to the contents of Section 5.2: Model Building and Section 5.3: Performance in my final report.**
+
+### Load Packages
+
+```{r message=F, warning=F}
+library(tidyverse)
+library(car)
+library(ResourceSelection)
+library(pROC)
+library(glmulti)
+#library(arm) use arm::binnedplot() directly instead
+```
+
+### Load Data
+
+```{r}
+# load from file
+clean <- read.csv("clean.csv")
+```
+
+### Assess Multicollinearity
+
+```{r}
+# fit model with all predictors
+multicoll <- glm(outcome ~ budget + domgross + intgross +
+                 budget_2013 + domgross_2013 + intgross_2013 +
+                 year + rating_score + english + american +
+                 metascore + imdb_rating + month + season +
+                 genre_rate + runtime + imdb_votes,
+                 family = "binomial",
+                 data = clean)
+
+# calculate vif
+round(vif(multicoll), 2)
+#knitr::kable(round(vif(multicoll), 2), format="latex")
+```
+
+```{r}
+# fit model with the inflation-adjusted variables removed
+no_multicoll <- glm(outcome ~ budget + domgross + intgross + 
+                    year + rating_score + english + american +
+                    metascore + imdb_rating + month + season +
+                    genre_rate + runtime + imdb_votes,
+                    family = "binomial",
+                    data = clean)
+
+# calculate vif
+round(vif(no_multicoll), 2)
+#knitr::kable(round(vif(no_multicoll), 2), format="latex")
+```
+
+```{r}
+# create updated version of clean with those vars removed
+filtered <- clean %>%
+    select(year, budget, domgross, intgross, rating_score,
+           english, american, metascore, imdb_rating,
+           month, season, genre_rate, runtime, imdb_votes, outcome)
+
+```
+
+### Full vs. Null Model
+
+```{r}
+# fit full and null model with filtered data (no NAs)
+md_null <- glm(outcome ~ 1,
+               family = "binomial", data = na.omit(filtered))
+md_full <- glm(outcome ~ .,
+               family = "binomial", data = na.omit(filtered))
+```
+
+```{r}
+# output full model summary
+summary(md_full)
+
+#knitr::kable(
+#  formatC(summary(md_full)$coefficients, format = "e", digits = 3),
+#  format = "latex"
+#)
+```
+
+```{r}
+# run likelihood ratio test between full and null model
+anova(md_null, md_full, test = "LRT")
+```
+
+```{r}
+# run hosmer and lemeshow GOF test
+hoslem.test(md_full$y, fitted(md_full), g = 10)
+```
+
+### Model Selection
+
+```{r}
+# find best AIC model
+best_aic <- glmulti(outcome ~ .,
+                    data = na.omit(filtered), family = binomial, 
+                    level = 1, crit = "aic", method = "g")
+```
+
+```{r}
+# find best BIC model
+best_bic <- glmulti(outcome ~ .,
+                    data = na.omit(filtered), family = binomial, 
+                    level = 1, crit = "bic", method = "g")
+```
+
+```{r}
+# compare models
+print(best_aic)
+print(best_bic)
+```
+
+```{r}
+# fit both models
+md_aic <- glm(outcome ~ year + budget +
+              intgross + metascore + imdb_rating +
+              genre_rate + runtime + imdb_votes,
+              family = "binomial", data = na.omit(filtered))
+
+md_bic <- glm(outcome ~ metascore + imdb_rating + genre_rate,
+              family = "binomial", data = na.omit(filtered))
+```
+
+```{r}
+# output model summaries
+summary(md_aic)
+summary(md_bic)
+```
+
+```{r}
+# run likelihood ratio test between full and reduced model
+anova(md_aic, md_full, test = "LRT")
+```
+
+### Final Model
+
+```{r}
+# fit the reduced AIC model as the final model
+# this time on filtered, not na.omit(filtered)
+md_final <- glm(outcome ~ year + budget + intgross +
+                metascore + imdb_rating +
+                genre_rate + runtime + imdb_votes,
+                family = "binomial", data = filtered)
+```
+
+```{r}
+# ouput model summary
+summary(md_final)
+
+#knitr::kable(
+#  formatC(summary(md_final)$coefficients, format = "e", digits = 3),
+#  format = "latex"
+#)
+```
+
+```{r}
+# rerun hosmer and lemeshow GOT test for good measure
+hoslem.test(md_final$y, fitted(md_final), g = 10)
+```
+
+```{r}
+# check for over dispersion (>2)
+summary(md_final)$deviance / summary(md_final)$df.residual
+```
+
+### Diagnostic Plots
+
+```{r}
+# deviance residual plot
+plot(
+  residuals(md_final, type = "deviance"),
+  main = "Deviance Residuals",
+  xlab = "Index",
+  ylab = "Deviance Residual"
+)
+abline(h = c(-2, 0, 2), col = "red", lty = 2)
+```
+
+```{r}
+# binned pearson residual plot
+arm::binnedplot(fitted(md_final),
+                residuals(md_final, type = "pearson"))
+```
+
+```{r}
+# leverage, cooks'd plot
+influencePlot(md_final)
+```
+
+```{r}
+# normal QQ plot of standardized pearson residuals
+plot(md_final, which=2)
+```
+
+### Performance
+
+```{r}
+# compute ROC curve
+roc_final <- roc(response = md_final$y,
+                 predictor = fitted(md_final))
+
+# plot ROC curve
+plot.roc(roc_final, print.thres = "best",
+         print.auc = TRUE, main="ROC Curve of Final Model")
+```
+
+```{r}
+# get optimal classification threshold
+roc_coords <- coords(roc_final, "best", best.method = "youden",
+                     ret = c("threshold", "sensitivity", "specificity"))
+
+roc_coords
+```
+
+```{r}
+# get AUC
+auc(md_final$y, fitted(md_final))
+```
+
+```{r}
+# compute predictions based on threshold
+pred_final <- ifelse(fitted(md_final) > roc_coords$threshold[1], 1, 0)
+
+# create contingency table
+contingency_counts <- table("Predicted" = pred_final, "Actual" = md_final$y)
+contingency_props <- round(contingency_counts / length(pred_final), 2)
+
+print(contingency_counts)
+print(contingency_props)
+```
+
+```{r}
+# compute classification accuracy
+mean(pred_final == md_final$y)
+```
